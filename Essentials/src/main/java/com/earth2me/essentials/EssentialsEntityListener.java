@@ -19,6 +19,7 @@ import org.bukkit.event.entity.EntityCombustByEntityEvent;
 import org.bukkit.event.entity.EntityCombustEvent;
 import org.bukkit.event.entity.EntityDamageByEntityEvent;
 import org.bukkit.event.entity.EntityDamageEvent;
+import org.bukkit.event.entity.EntityPlaceEvent;
 import org.bukkit.event.entity.EntityRegainHealthEvent;
 import org.bukkit.event.entity.EntityRegainHealthEvent.RegainReason;
 import org.bukkit.event.entity.EntityShootBowEvent;
@@ -40,11 +41,34 @@ public class EssentialsEntityListener implements Listener {
         this.ess = ess;
     }
 
+    @EventHandler(priority = EventPriority.LOWEST, ignoreCancelled = true)
+    public void onVanishedEntityDamageByEntity(final EntityDamageByEntityEvent event) {
+        if (shouldCancelVanishDamage(event)) {
+            event.setCancelled(true);
+        }
+    }
+
+    @EventHandler(priority = EventPriority.LOWEST, ignoreCancelled = true)
+    public void onVanishedEntityDamage(final EntityDamageEvent event) {
+        if (event.getEntity() instanceof Player && ess.getUser((Player) event.getEntity()).isVanished()) {
+            final Player player = (Player) event.getEntity();
+            player.setFireTicks(0);
+            player.setRemainingAir(player.getMaximumAir());
+            event.setCancelled(true);
+        }
+    }
+
     // This method does something undocumented reguarding certain bucket types #EasterEgg
     @EventHandler(priority = EventPriority.LOW)
     public void onEntityDamage(final EntityDamageByEntityEvent event) {
         final Entity eAttack = event.getDamager();
         final Entity eDefend = event.getEntity();
+
+        if (shouldCancelVanishDamage(event)) {
+            event.setCancelled(true);
+            return;
+        }
+
         if (eAttack instanceof Player) {
             final User attacker = ess.getUser((Player) eAttack);
             if (eDefend instanceof Player) {
@@ -71,6 +95,26 @@ public class EssentialsEntityListener implements Listener {
                 attacker.updateActivityOnInteract(true);
             }
         }
+    }
+
+    private boolean shouldCancelVanishDamage(final EntityDamageByEntityEvent event) {
+        final Entity eAttack = event.getDamager();
+        final Entity eDefend = event.getEntity();
+
+        if (eDefend instanceof Player && ess.getUser((Player) eDefend).isVanished()) {
+            return true;
+        }
+
+        if (eAttack instanceof Player && ess.getUser((Player) eAttack).isVanished()) {
+            return true;
+        }
+
+        if (eAttack instanceof Projectile) {
+            final Object shooter = ((Projectile) eAttack).getShooter();
+            return shooter instanceof Player && ess.getUser((Player) shooter).isVanished();
+        }
+
+        return false;
     }
 
     private void onPlayerVsPlayerDamage(final EntityDamageByEntityEvent event, final Player defender, final User attacker) {
@@ -121,8 +165,20 @@ public class EssentialsEntityListener implements Listener {
 
     @EventHandler(priority = EventPriority.LOW, ignoreCancelled = true)
     public void onEntityDamage(final EntityDamageEvent event) {
-        if (event.getEntity() instanceof Player && ess.getUser((Player) event.getEntity()).isGodModeEnabled()) {
+        if (event.getEntity() instanceof Player) {
             final Player player = (Player) event.getEntity();
+            final User user = ess.getUser(player);
+            if (user.isVanished()) {
+                player.setFireTicks(0);
+                player.setRemainingAir(player.getMaximumAir());
+                event.setCancelled(true);
+                return;
+            }
+
+            if (!user.isGodModeEnabled()) {
+                return;
+            }
+
             player.setFireTicks(0);
             player.setRemainingAir(player.getMaximumAir());
             event.setCancelled(true);
@@ -131,7 +187,18 @@ public class EssentialsEntityListener implements Listener {
 
     @EventHandler(priority = EventPriority.LOW, ignoreCancelled = true)
     public void onEntityCombust(final EntityCombustEvent event) {
-        if (event.getEntity() instanceof Player && ess.getUser((Player) event.getEntity()).isGodModeEnabled()) {
+        if (event.getEntity() instanceof Player) {
+            final User user = ess.getUser((Player) event.getEntity());
+            if (user.isVanished() || user.isGodModeEnabled()) {
+                event.setCancelled(true);
+            }
+        }
+    }
+
+    @EventHandler(priority = EventPriority.LOWEST, ignoreCancelled = true)
+    public void onEntityPlace(final EntityPlaceEvent event) {
+        final Player player = event.getPlayer();
+        if (player != null && ess.getUser(player).isVanished()) {
             event.setCancelled(true);
         }
     }

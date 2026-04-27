@@ -12,6 +12,7 @@ import org.bukkit.entity.EntityType;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.EventPriority;
 import org.bukkit.event.Listener;
+import org.bukkit.event.block.BlockBreakEvent;
 import org.bukkit.event.block.BlockPlaceEvent;
 import org.bukkit.inventory.ItemStack;
 
@@ -26,6 +27,12 @@ public class EssentialsBlockListener implements Listener {
 
     @EventHandler(priority = EventPriority.LOW, ignoreCancelled = true)
     public void onBlockPlace(final BlockPlaceEvent event) {
+        final User user = ess.getUser(event.getPlayer());
+        if (user.isVanished()) {
+            event.setCancelled(true);
+            return;
+        }
+
         final ItemStack is = event.getItemInHand();
 
         if (is.getType() == MaterialUtil.SPAWNER && ess.provider(PersistentDataProvider.class).getString(is, "convert") != null) {
@@ -42,7 +49,6 @@ public class EssentialsBlockListener implements Listener {
             }
         }
 
-        final User user = ess.getUser(event.getPlayer());
         if (user.hasUnlimited(is) && user.getBase().getGameMode() == GameMode.SURVIVAL) {
             ess.scheduleEntityDelayedTask(user.getBase(), () -> {
                 if (is != null && is.getType() != null && !MaterialUtil.isAir(is.getType())) {
@@ -52,6 +58,13 @@ public class EssentialsBlockListener implements Listener {
                     user.getBase().updateInventory();
                 }
             });
+        }
+    }
+
+    @EventHandler(priority = EventPriority.LOW, ignoreCancelled = true)
+    public void onBlockBreak(final BlockBreakEvent event) {
+        if (ess.getUser(event.getPlayer()).isVanished()) {
+            event.setCancelled(true);
         }
     }
 }
