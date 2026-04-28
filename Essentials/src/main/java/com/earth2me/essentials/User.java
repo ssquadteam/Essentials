@@ -26,6 +26,7 @@ import net.ess3.provider.PlayerLocaleProvider;
 import net.essentialsx.api.v2.events.PreTransactionEvent;
 import net.essentialsx.api.v2.events.TransactionEvent;
 import net.essentialsx.api.v2.services.mail.MailSender;
+import org.bukkit.GameMode;
 import org.bukkit.Location;
 import org.bukkit.Material;
 import org.bukkit.Statistic;
@@ -101,6 +102,8 @@ public class User extends UserData implements Comparable<User>, IMessageRecipien
     private transient final List<String> signCopy = Lists.newArrayList("", "", "", "");
     private transient long lastVanishTime = System.currentTimeMillis();
     private transient int flightTick = -1;
+    private transient Boolean preVanishAllowFlight;
+    private transient Boolean preVanishFlying;
     private String lastLocaleString;
     private Locale playerLocale;
 
@@ -1032,18 +1035,29 @@ public class User extends UserData implements Comparable<User>, IMessageRecipien
 
     @Override
     public void setVanished(final boolean set) {
+        final boolean wasVanished = vanished;
         vanished = set;
         if (set) {
+            if (!wasVanished) {
+                preVanishAllowFlight = getBase().getAllowFlight();
+                preVanishFlying = getBase().isFlying();
+            }
+
             for (final User user : ess.getOnlineUsers()) {
                 if (!user.isAuthorized("essentials.vanish.see")) {
-                    //noinspection deprecation
-                    user.getBase().hidePlayer(getBase());
+                    user.getBase().hidePlayer(ess, getBase());
                 }
             }
             setHidden(true);
             lastVanishTime = System.currentTimeMillis();
             ess.getVanishedPlayersNew().add(getName());
             this.getBase().setMetadata("vanished", new FixedMetadataValue(ess, true));
+            setVanishFlight(true);
+            ess.scheduleEntityDelayedTask(getBase(), () -> {
+                if (isVanished()) {
+                    setVanishFlight(true);
+                }
+            });
             if (isAuthorized("essentials.vanish.effect")) {
                 this.getBase().addPotionEffect(new PotionEffect(PotionEffectType.INVISIBILITY, Integer.MAX_VALUE, 1, false));
             }
@@ -1052,12 +1066,12 @@ public class User extends UserData implements Comparable<User>, IMessageRecipien
             }
         } else {
             for (final Player p : ess.getOnlinePlayers()) {
-                //noinspection deprecation
-                p.showPlayer(getBase());
+                p.showPlayer(ess, getBase());
             }
             setHidden(false);
             ess.getVanishedPlayersNew().remove(getName());
             this.getBase().setMetadata("vanished", new FixedMetadataValue(ess, false));
+            restorePreVanishFlight();
             if (isAuthorized("essentials.vanish.effect")) {
                 this.getBase().removePotionEffect(PotionEffectType.INVISIBILITY);
             }
@@ -1065,6 +1079,46 @@ public class User extends UserData implements Comparable<User>, IMessageRecipien
                 getBase().setSleepingIgnored(false);
             }
         }
+    }
+
+    private void restorePreVanishFlight() {
+        if (getBase().getGameMode() == GameMode.CREATIVE || getBase().getGameMode() == GameMode.SPECTATOR) {
+            clearPreVanishFlight();
+            return;
+        }
+
+        if (preVanishAllowFlight == null) {
+            getBase().setFlying(false);
+            getBase().setAllowFlight(isFlyModeEnabled() && isAuthorized("essentials.fly"));
+            return;
+        }
+
+        if (!preVanishAllowFlight) {
+            getBase().setFlying(false);
+            getBase().setAllowFlight(false);
+        } else {
+            getBase().setAllowFlight(true);
+            getBase().setFlying(Boolean.TRUE.equals(preVanishFlying));
+        }
+
+        clearPreVanishFlight();
+    }
+
+    void ensureVanishFlight() {
+        setVanishFlight(false);
+    }
+
+    private void setVanishFlight(final boolean startFlying) {
+        getBase().setFallDistance(0f);
+        getBase().setAllowFlight(true);
+        if (startFlying) {
+            getBase().setFlying(true);
+        }
+    }
+
+    private void clearPreVanishFlight() {
+        preVanishAllowFlight = null;
+        preVanishFlying = null;
     }
 
     public boolean checkSignThrottle() {

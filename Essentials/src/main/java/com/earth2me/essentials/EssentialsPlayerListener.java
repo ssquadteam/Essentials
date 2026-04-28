@@ -37,6 +37,8 @@ import org.bukkit.GameMode;
 import org.bukkit.Location;
 import org.bukkit.Material;
 import org.bukkit.World;
+import org.bukkit.block.Block;
+import org.bukkit.block.BlockState;
 import org.bukkit.command.Command;
 import org.bukkit.command.FormattedCommandAlias;
 import org.bukkit.command.PluginCommand;
@@ -46,6 +48,7 @@ import org.bukkit.entity.Player;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.EventPriority;
 import org.bukkit.event.Listener;
+import org.bukkit.event.block.Action;
 import org.bukkit.event.inventory.ClickType;
 import org.bukkit.event.inventory.InventoryClickEvent;
 import org.bukkit.event.inventory.InventoryCloseEvent;
@@ -54,6 +57,7 @@ import org.bukkit.event.inventory.InventoryType;
 import org.bukkit.event.player.AsyncPlayerChatEvent;
 import org.bukkit.event.player.AsyncPlayerPreLoginEvent;
 import org.bukkit.event.player.PlayerBucketEmptyEvent;
+import org.bukkit.event.player.PlayerBucketFillEvent;
 import org.bukkit.event.player.PlayerChangedWorldEvent;
 import org.bukkit.event.player.PlayerCommandPreprocessEvent;
 import org.bukkit.event.player.PlayerEggThrowEvent;
@@ -242,6 +246,9 @@ public class EssentialsPlayerListener implements Listener {
         }
 
         final User user = ess.getUser(event.getPlayer());
+        if (user.isVanished() && !event.getPlayer().getAllowFlight()) {
+            user.ensureVanishFlight();
+        }
 
         if (user.isFreeze()) {
             final Location from = event.getFrom();
@@ -441,7 +448,7 @@ public class EssentialsPlayerListener implements Listener {
             for (final String p : ess.getVanishedPlayersNew()) {
                 final Player toVanish = ess.getServer().getPlayerExact(p);
                 if (toVanish != null && toVanish.isOnline()) {
-                    user.getBase().hidePlayer(toVanish);
+                    user.getBase().hidePlayer(ess, toVanish);
                     if (ess.getSettings().isDebug()) {
                         ess.getLogger().info("Hiding vanished player: " + p);
                     }
@@ -769,9 +776,21 @@ public class EssentialsPlayerListener implements Listener {
     @EventHandler(priority = EventPriority.HIGH, ignoreCancelled = true)
     public void onPlayerBucketEmpty(final PlayerBucketEmptyEvent event) {
         final User user = ess.getUser(event.getPlayer());
+        if (user.isVanished()) {
+            event.setCancelled(true);
+            return;
+        }
+
         if (user.hasUnlimited(new ItemStack(event.getBucket()))) {
             event.getItemStack().setType(event.getBucket());
             ess.scheduleEntityDelayedTask(user.getBase(), user.getBase()::updateInventory);
+        }
+    }
+
+    @EventHandler(priority = EventPriority.HIGH, ignoreCancelled = true)
+    public void onPlayerBucketFill(final PlayerBucketFillEvent event) {
+        if (ess.getUser(event.getPlayer()).isVanished()) {
+            event.setCancelled(true);
         }
     }
 
@@ -968,6 +987,10 @@ public class EssentialsPlayerListener implements Listener {
     public void onPlayerInteract(final PlayerInteractEvent event) {
         boolean updateActivity = true;
 
+        if (openSilentVanishContainer(event)) {
+            return;
+        }
+
         switch (event.getAction()) {
             case RIGHT_CLICK_BLOCK:
                 if (!event.isCancelled() && MaterialUtil.isBed(event.getClickedBlock().getType()) && ess.getSettings().getUpdateBedAtDaytime()) {
@@ -1011,6 +1034,77 @@ public class EssentialsPlayerListener implements Listener {
         if (updateActivity) {
             ess.getUser(event.getPlayer()).updateActivityOnInteract(true);
         }
+    }
+
+    private boolean openSilentVanishContainer(final PlayerInteractEvent event) {
+        if (event.getAction() != Action.RIGHT_CLICK_BLOCK || event.getClickedBlock() == null) {
+            return false;
+        }
+
+        final Player player = event.getPlayer();
+        if (!ess.getUser(player).isVanished()) {
+            return false;
+        }
+
+        final Block block = event.getClickedBlock();
+        final Material type = block.getType();
+        if (type == Material.ENDER_CHEST) {
+            event.setCancelled(true);
+            ess.scheduleEntityDelayedTask(player, () -> player.openInventory(player.getEnderChest()));
+            return true;
+        }
+
+        if (!isSilentVanishContainer(type)) {
+            return false;
+        }
+
+        final BlockState state = block.getState();
+        if (!(state instanceof InventoryHolder)) {
+            return false;
+        }
+
+        final Inventory sourceInventory = ((InventoryHolder) state).getInventory();
+        final SilentVanishInventoryHolder holder = new SilentVanishInventoryHolder();
+        final Inventory silentInventory = ess.getServer().createInventory(
+            holder,
+            sourceInventory.getSize(),
+            "Silent " + getSilentVanishContainerName(type)
+        );
+        holder.setInventory(silentInventory);
+        silentInventory.setContents(cloneContents(sourceInventory));
+
+        event.setCancelled(true);
+        ess.scheduleEntityDelayedTask(player, () -> player.openInventory(silentInventory));
+        return true;
+    }
+
+    private boolean isSilentVanishContainer(final Material type) {
+        return type == Material.CHEST
+            || type == Material.TRAPPED_CHEST
+            || type == Material.BARREL
+            || type.name().endsWith("SHULKER_BOX");
+    }
+
+    private String getSilentVanishContainerName(final Material type) {
+        if (type == Material.BARREL) {
+            return "Barrel";
+        }
+
+        if (type.name().endsWith("SHULKER_BOX")) {
+            return "Shulker";
+        }
+
+        return "Chest";
+    }
+
+    private ItemStack[] cloneContents(final Inventory inventory) {
+        final ItemStack[] contents = inventory.getContents();
+        for (int i = 0; i < contents.length; i++) {
+            if (contents[i] != null) {
+                contents[i] = contents[i].clone();
+            }
+        }
+        return contents;
     }
 
     // This method allows the /jump lock feature to work, allows teleporting while flying #EasterEgg
@@ -1076,6 +1170,11 @@ public class EssentialsPlayerListener implements Listener {
         final Inventory top = provider.getTopInventory(event.getView());
         final InventoryType type = top.getType();
 
+        if (top.getHolder() instanceof SilentVanishInventoryHolder) {
+            event.setCancelled(true);
+            return;
+        }
+
         final Inventory clickedInventory;
         if (event.getRawSlot() < 0) {
             clickedInventory = null;
@@ -1140,6 +1239,11 @@ public class EssentialsPlayerListener implements Listener {
     public void onInventoryDragEvent(final InventoryDragEvent event) {
         final InventoryViewProvider provider = ess.provider(InventoryViewProvider.class);
         final Inventory top = provider.getTopInventory(event.getView());
+        if (top.getHolder() instanceof SilentVanishInventoryHolder) {
+            event.setCancelled(true);
+            return;
+        }
+
         if (top.getType() != InventoryType.PLAYER) {
             return;
         }
@@ -1231,6 +1335,19 @@ public class EssentialsPlayerListener implements Listener {
         }
     }
 
+    private static final class SilentVanishInventoryHolder implements InventoryHolder {
+        private Inventory inventory;
+
+        @Override
+        public Inventory getInventory() {
+            return inventory;
+        }
+
+        private void setInventory(final Inventory inventory) {
+            this.inventory = inventory;
+        }
+    }
+
     private final class PickupListenerPre1_12 implements Listener {
         @EventHandler(priority = EventPriority.LOW, ignoreCancelled = true)
         public void onPlayerPickupItem(final org.bukkit.event.player.PlayerPickupItemEvent event) {
@@ -1239,8 +1356,7 @@ public class EssentialsPlayerListener implements Listener {
                 return;
             }
             final User user = ess.getUser(event.getPlayer());
-            if ((ess.getSettings().getDisableItemPickupWhileAfk() && user.isAfk())
-                || (user.isVanished() && !user.isAuthorizedCached("essentials.vanish.pickup"))) {
+            if ((ess.getSettings().getDisableItemPickupWhileAfk() && user.isAfk()) || user.isVanished()) {
                 event.setCancelled(true);
             }
         }
@@ -1251,8 +1367,7 @@ public class EssentialsPlayerListener implements Listener {
         public void onPlayerPickupItem(final org.bukkit.event.entity.EntityPickupItemEvent event) {
             if (event.getEntity() instanceof Player) {
                 final User user = ess.getUser((Player) event.getEntity());
-                if ((ess.getSettings().getDisableItemPickupWhileAfk() && user.isAfk())
-                    || (user.isVanished() && !user.isAuthorizedCached("essentials.vanish.pickup"))) {
+                if ((ess.getSettings().getDisableItemPickupWhileAfk() && user.isAfk()) || user.isVanished()) {
                     event.setCancelled(true);
                 }
             }
