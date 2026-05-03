@@ -10,11 +10,13 @@ public final class EssentialsRedisConfig {
     private final boolean enabled;
     private final String uri;
     private final String keyPrefix;
+    private final String serverId;
 
-    private EssentialsRedisConfig(final boolean enabled, final String uri, final String keyPrefix) {
+    private EssentialsRedisConfig(final boolean enabled, final String uri, final String keyPrefix, final String serverId) {
         this.enabled = enabled;
         this.uri = uri;
         this.keyPrefix = keyPrefix;
+        this.serverId = serverId;
     }
 
     public static EssentialsRedisConfig load(final JavaPlugin plugin) {
@@ -29,11 +31,16 @@ public final class EssentialsRedisConfig {
         return new EssentialsRedisConfig(
                 config.getBoolean("redis.enabled", true),
                 trim(redisUri),
-                nonBlank(config.getString("redis.key-prefix"), "essentials:"));
+                nonBlank(config.getString("redis.key-prefix"), "essentials:"),
+                trim(config.getString("redis.server-id")));
     }
 
     public boolean isAvailable() {
         return enabled && !isBlank(uri);
+    }
+
+    public boolean hasServerId() {
+        return !isBlank(serverId);
     }
 
     String getUri() {
@@ -42,6 +49,10 @@ public final class EssentialsRedisConfig {
 
     String getKeyPrefix() {
         return keyPrefix;
+    }
+
+    String getServerId() {
+        return serverId;
     }
 
     private static String nonBlank(final String value, final String fallback) {

@@ -39,6 +39,7 @@ import com.earth2me.essentials.items.LegacyItemDb;
 import com.earth2me.essentials.metrics.MetricsWrapper;
 import com.earth2me.essentials.perm.PermissionsDefaults;
 import com.earth2me.essentials.perm.PermissionsHandler;
+import com.earth2me.essentials.redis.CrossServerTeleportManager;
 import com.earth2me.essentials.redis.EssentialsRedisConfig;
 import com.earth2me.essentials.redis.RedisManager;
 import com.earth2me.essentials.redis.RedisShoutLimitStore;
@@ -196,6 +197,7 @@ public class Essentials extends JavaPlugin implements net.ess3.api.IEssentials {
     private transient UpdateChecker updateChecker;
     private transient AdventureFacet adventureFacet;
     private transient RedisManager redisManager;
+    private transient CrossServerTeleportManager crossServerTeleportManager;
     private transient ShoutLimitStore shoutLimitStore;
 
     static {
@@ -616,8 +618,6 @@ public class Essentials extends JavaPlugin implements net.ess3.api.IEssentials {
             iConf.reloadConfig();
             execTimer.mark("Reload(" + iConf.getClass().getSimpleName() + ")");
         }
-        reloadRedisServices();
-
         i18n.updateLocale(settings.getLocale());
         for (final String commandName : this.getDescription().getCommands().keySet()) {
             final Command command = this.getCommand(commandName);
@@ -629,6 +629,7 @@ public class Essentials extends JavaPlugin implements net.ess3.api.IEssentials {
 
         final PluginManager pm = getServer().getPluginManager();
         registerListeners(pm);
+        reloadRedisServices();
 
         initAdventureFacet();
     }
@@ -637,12 +638,17 @@ public class Essentials extends JavaPlugin implements net.ess3.api.IEssentials {
         return shoutLimitStore;
     }
 
+    public CrossServerTeleportManager getCrossServerTeleportManager() {
+        return crossServerTeleportManager;
+    }
+
     private void reloadRedisServices() {
         closeRedisServices();
         final EssentialsRedisConfig redisConfig = EssentialsRedisConfig.load(this);
         if (!redisConfig.isAvailable()) {
             shoutLimitStore = null;
             redisManager = null;
+            crossServerTeleportManager = null;
             getLogger().warning("Redis is disabled or missing a URI. Redis-backed Essentials features will use local fallbacks where available.");
             return;
         }
@@ -650,9 +656,18 @@ public class Essentials extends JavaPlugin implements net.ess3.api.IEssentials {
         try {
             redisManager = new RedisManager(redisConfig);
             shoutLimitStore = new RedisShoutLimitStore(redisManager);
+            if (redisConfig.hasServerId()) {
+                crossServerTeleportManager = new CrossServerTeleportManager(this, redisManager);
+                crossServerTeleportManager.start();
+            } else {
+                crossServerTeleportManager = null;
+                getLogger().warning("Cross-server /tpo is disabled because redis.server-id is not set.");
+            }
             getLogger().info("Connected to Redis for Essentials feature sync.");
         } catch (final RuntimeException ex) {
+            closeRedisServices();
             redisManager = null;
+            crossServerTeleportManager = null;
             shoutLimitStore = null;
             getLogger().warning("Failed to connect to Redis for Essentials feature sync: " + ex.getMessage());
         }
@@ -663,6 +678,9 @@ public class Essentials extends JavaPlugin implements net.ess3.api.IEssentials {
             if (shoutLimitStore != null) {
                 shoutLimitStore.close();
             }
+            if (crossServerTeleportManager != null) {
+                crossServerTeleportManager.close();
+            }
             if (redisManager != null) {
                 redisManager.close();
             }
@@ -670,6 +688,7 @@ public class Essentials extends JavaPlugin implements net.ess3.api.IEssentials {
             getLogger().warning("Failed to close Redis services: " + ex.getMessage());
         } finally {
             shoutLimitStore = null;
+            crossServerTeleportManager = null;
             redisManager = null;
         }
     }

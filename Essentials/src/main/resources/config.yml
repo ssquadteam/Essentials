@@ -37,6 +37,9 @@ nickname-prefix: '~'
 redis:
   enabled: true
   key-prefix: 'essentials:'
+  # Must match this backend's proxy server name for cross-region /tpo transfers.
+  # Leave blank to disable cross-region /tpo while keeping other Redis-backed features enabled.
+  server-id: ''
 
 # The maximum length allowed in nicknames. The nickname prefix is not included in this.
 max-nick-length: 16
